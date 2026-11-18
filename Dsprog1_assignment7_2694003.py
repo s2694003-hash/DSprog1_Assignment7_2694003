@@ -30,19 +30,27 @@ def to_number(text):
     
 # 指定したページのHTMLを取得してBeautifulSoupオブジェクトに変換する
 def get_page(page):
-    try:
-        res = requests.get(url, params={'page': page}, headers=header, timeout=10)
-        res.raise_for_status()
-        res.encoding = 'utf-8'  # 文字コードをUTF-8に変換する
-    except requests.RequestException as e:
-        print(f"取得失敗:{page}ページ目 ({e})")
-        return None
-    finally:
-        time.sleep(1)  # サーバーへの負荷軽減のため1秒間スリープする
-    return BeautifulSoup(res.text, 'html.parser')
+    for retry in range(5):  # 429が返ってきたときは最大5回まで取り直す
+        try:
+            res = requests.get(url, params={'page': page}, headers=header, timeout=10)
+            if res.status_code == 429:  # アクセスが多すぎると言われたら、待ってから取り直す
+                wait = int(res.headers.get('Retry-After', 60))  # 待つ秒数はサーバーが教えてくれる
+                print(f"{page}ページ目:429 Too Many Requests のため{wait}秒待って取り直します")
+                time.sleep(wait)
+                continue
+            res.raise_for_status()
+            res.encoding = 'utf-8'  # 文字コードをUTF-8に変換する
+            return BeautifulSoup(res.text, 'html.parser')
+        except requests.RequestException as e:
+            print(f"取得失敗:{page}ページ目 ({e})")
+            return None
+        finally:
+            time.sleep(1)  # サーバーへの負荷軽減のため1秒間スリープする
+    print(f"取得失敗:{page}ページ目 (5回取り直しても429が返ってきた)")
+    return None
 
 
-# 1. 1ページ目を取得し、ページ送りのリンクから最後のページ番号を取得する
+# 1ページ目を取得し、ページ送りのリンクから最後のページ番号を取得する
 html_soup = get_page(1)
 page_links = html_soup.select('a[data-component="Pagination.Page"]')
 last_page = max(int(a.get_text(strip=True)) for a in page_links)
