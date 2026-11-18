@@ -19,21 +19,14 @@ print(f"ステータスメッセージ:{res.reason}")
 with open("github-google.html", "w", encoding="utf-8") as f:
     f.write(res.text)
 
-# HTMLのソースコードをBeautifulsoup4オブジェクトに変換する
-html_soup = BeautifulSoup(res.text, 'html.parser')
-
-# リポジトリ1件ごと（<li>）に、名前・主要な言語・スターの数を取り出す
-for li in html_soup.select('ul[data-listview-component="items-list"] > li'):
-    name = li.select_one('h3 a span').get_text(strip=True)
-
-    lang_tag = li.select_one('span[class*="PrimaryLanguageName"]')
-    language = lang_tag.get_text(strip=True) if lang_tag else None  # 言語がない場合はNone
-
-    star_tag = li.select_one('a[href$="/stargazers"]')
-    stars = star_tag.get_text(strip=True) if star_tag else "0"
-
-    print(name, language, stars)
-
+# スター数の表示（"1.4k"・"12"・"1,234"）を数値に変換する
+def to_number(text):
+    text = text.strip().lower().replace(",", "")
+    if text.endswith("k"):
+        return int(float(text[:-1]) * 1000)
+    if text.endswith("m"):
+        return int(float(text[:-1]) * 1000000)
+    return int(text)
     
 # 指定したページのHTMLを取得してBeautifulSoupオブジェクトに変換する
 def get_page(page):
@@ -70,7 +63,7 @@ for page in range(1, last_page + 1):
         language = lang_tag.get_text(strip=True) if lang_tag else None  # 言語がない場合はNone
 
         star_tag = li.select_one('a[href$="/stargazers"]')
-        stars = star_tag.get_text(strip=True) if star_tag else "0"
+        stars = to_number(star_tag.get_text()) if star_tag else 0   
 
         print(name, language, stars)
         count += 1
