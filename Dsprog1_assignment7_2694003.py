@@ -1,0 +1,130 @@
+import requests
+from bs4 import BeautifulSoup
+import time
+import sqlite3
+
+url = "https://github.com/orgs/google/repositories"
+db_name = "github_google_repositories.db"
+
+header = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+}
+
+# Webサーバーにリクエストを出す
+res = requests.get(url, headers=header)
+res.encoding = 'utf-8'  # 文字コードをUTF-8に変換する
+
+print(f"ステータスコード:{res.status_code}")
+print(f"ステータスメッセージ:{res.reason}")
+
+# 取得したHTMLをgithub-google.htmlファイルに書き込む（タグの構造を確認するため）
+with open("github-google.html", "w", encoding="utf-8") as f:
+    f.write(res.text)
+
+# スター数の表示（"1.4k"・"12"・"1,234"）を数値に変換する
+def to_number(text):
+    text = text.strip().lower().replace(",", "")
+    if text.endswith("k"):
+        return int(float(text[:-1]) * 1000)
+    if text.endswith("m"):
+        return int(float(text[:-1]) * 1000000)
+    return int(text)
+    
+# 指定したページのHTMLを取得してBeautifulSoupオブジェクトに変換する
+def get_page(page):
+    for retry in range(5):  # 429が返ってきたときは最大5回まで取り直す
+        try:
+            res = requests.get(url, params={'page': page}, headers=header, timeout=10)
+            if res.status_code == 429:  # アクセスが多すぎると言われたら、待ってから取り直す
+                wait = int(res.headers.get('Retry-After', 60))  # 待つ秒数はサーバーが教えてくれる
+                print(f"{page}ページ目:429 Too Many Requests のため{wait}秒待って取り直します")
+                time.sleep(wait)
+                continue
+            res.raise_for_status()
+            res.encoding = 'utf-8'  # 文字コードをUTF-8に変換する
+            return BeautifulSoup(res.text, 'html.parser')
+        except requests.RequestException as e:
+            print(f"取得失敗:{page}ページ目 ({e})")
+            return None
+        finally:
+            time.sleep(1)  # サーバーへの負荷軽減のため1秒間スリープする
+    print(f"取得失敗:{page}ページ目 (5回取り直しても429が返ってきた)")
+    return None
+
+# DBに接続し、データを保存するテーブルを作成する
+conn = sqlite3.connect(db_name)
+cur = conn.cursor()
+cur.execute("""
+    CREATE TABLE IF NOT EXISTS repositories (
+        id       INTEGER PRIMARY KEY AUTOINCREMENT,
+        name     TEXT UNIQUE,
+        language TEXT,
+        stars    INTEGER
+    )
+""")
+
+
+# 1ページ目を取得し、ページ送りのリンクから最後のページ番号を取得する
+html_soup = get_page(1)
+page_links = html_soup.select('a[data-component="Pagination.Page"]')
+last_page = max(int(a.get_text(strip=True)) for a in page_links)
+print(f"全{last_page}ページ")
+
+count = 0
+for page in range(1, last_page + 1):
+    if page > 1:
+        html_soup = get_page(page)
+        if html_soup is None:
+            continue
+
+    # 2. リポジトリ1件ごと（<li>）に、名前・主要な言語・スターの数を取り出す
+    for li in html_soup.select('ul[data-listview-component="items-list"] > li'):
+        name = li.select_one('h3 a span').get_text(strip=True)
+
+        lang_tag = li.select_one('span[class*="PrimaryLanguageName"]')
+        language = lang_tag.get_text(strip=True) if lang_tag else None  # 言語がない場合はNone
+
+        star_tag = li.select_one('a[href$="/stargazers"]')
+        stars = to_number(star_tag.get_text()) if star_tag else 0   
+
+        print(name, language, stars)
+
+        # 取り出したデータをDBに保存する
+        cur.execute(
+            "INSERT OR REPLACE INTO repositories (name, language, stars) VALUES (?, ?, ?)",
+            (name, language, stars),
+        )
+
+        count += 1
+
+    conn.commit()
+    print(f"{page}/{last_page}ページ目:{count}件")
+
+print(f"完了:{count}件")
+
+# 保存したデータをSELECT文で表示する
+print("---- 保存したリポジトリの件数 ----")
+cur.execute("SELECT COUNT(*) FROM repositories")
+print(cur.fetchone()[0])
+
+print("---- スターの多い順（上位20件） ----")
+cur.execute("SELECT name, language, stars FROM repositories ORDER BY stars DESC LIMIT 20")
+for name, language, stars in cur.fetchall():
+    print(f"{name:40} {str(language):15} {stars:>8}")
+
+print("---- 言語ごとのリポジトリ数（上位10件） ----")
+cur.execute("""
+    SELECT language, COUNT(*) FROM repositories
+    GROUP BY language ORDER BY COUNT(*) DESC LIMIT 10
+""")
+for language, n in cur.fetchall():
+    print(f"{str(language):15} {n:>5}")
+
+print("---- 保存したデータ（全件） ----")
+cur.execute("SELECT * FROM repositories")
+for row in cur.fetchall():
+    print(row)
+
+conn.close()
+
+
