@@ -1,5 +1,6 @@
 import requests
 from bs4 import BeautifulSoup
+import time
 
 url = "https://github.com/orgs/google/repositories"
 
@@ -18,17 +19,63 @@ print(f"ステータスメッセージ:{res.reason}")
 with open("github-google.html", "w", encoding="utf-8") as f:
     f.write(res.text)
 
-# HTMLのソースコードをBeautifulsoup4オブジェクトに変換する
-html_soup = BeautifulSoup(res.text, 'html.parser')
+# スター数の表示（"1.4k"・"12"・"1,234"）を数値に変換する
+def to_number(text):
+    text = text.strip().lower().replace(",", "")
+    if text.endswith("k"):
+        return int(float(text[:-1]) * 1000)
+    if text.endswith("m"):
+        return int(float(text[:-1]) * 1000000)
+    return int(text)
+    
+# 指定したページのHTMLを取得してBeautifulSoupオブジェクトに変換する
+def get_page(page):
+    for retry in range(5):  # 429が返ってきたときは最大5回まで取り直す
+        try:
+            res = requests.get(url, params={'page': page}, headers=header, timeout=10)
+            if res.status_code == 429:  # アクセスが多すぎると言われたら、待ってから取り直す
+                wait = int(res.headers.get('Retry-After', 60))  # 待つ秒数はサーバーが教えてくれる
+                print(f"{page}ページ目:429 Too Many Requests のため{wait}秒待って取り直します")
+                time.sleep(wait)
+                continue
+            res.raise_for_status()
+            res.encoding = 'utf-8'  # 文字コードをUTF-8に変換する
+            return BeautifulSoup(res.text, 'html.parser')
+        except requests.RequestException as e:
+            print(f"取得失敗:{page}ページ目 ({e})")
+            return None
+        finally:
+            time.sleep(1)  # サーバーへの負荷軽減のため1秒間スリープする
+    print(f"取得失敗:{page}ページ目 (5回取り直しても429が返ってきた)")
+    return None
 
-# リポジトリ1件ごと（<li>）に、名前・主要な言語・スターの数を取り出す
-for li in html_soup.select('ul[data-listview-component="items-list"] > li'):
-    name = li.select_one('h3 a span').get_text(strip=True)
 
-    lang_tag = li.select_one('span[class*="PrimaryLanguageName"]')
-    language = lang_tag.get_text(strip=True) if lang_tag else None  # 言語がない場合はNone
+# 1ページ目を取得し、ページ送りのリンクから最後のページ番号を取得する
+html_soup = get_page(1)
+page_links = html_soup.select('a[data-component="Pagination.Page"]')
+last_page = max(int(a.get_text(strip=True)) for a in page_links)
+print(f"全{last_page}ページ")
 
-    star_tag = li.select_one('a[href$="/stargazers"]')
-    stars = star_tag.get_text(strip=True) if star_tag else "0"
+count = 0
+for page in range(1, last_page + 1):
+    if page > 1:
+        html_soup = get_page(page)
+        if html_soup is None:
+            continue
 
-    print(name, language, stars)
+    # 2. リポジトリ1件ごと（<li>）に、名前・主要な言語・スターの数を取り出す
+    for li in html_soup.select('ul[data-listview-component="items-list"] > li'):
+        name = li.select_one('h3 a span').get_text(strip=True)
+
+        lang_tag = li.select_one('span[class*="PrimaryLanguageName"]')
+        language = lang_tag.get_text(strip=True) if lang_tag else None  # 言語がない場合はNone
+
+        star_tag = li.select_one('a[href$="/stargazers"]')
+        stars = to_number(star_tag.get_text()) if star_tag else 0   
+
+        print(name, language, stars)
+        count += 1
+
+    print(f"{page}/{last_page}ページ目:{count}件")
+
+print(f"完了:{count}件")
