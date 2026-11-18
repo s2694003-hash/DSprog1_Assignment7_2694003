@@ -1,8 +1,10 @@
 import requests
 from bs4 import BeautifulSoup
 import time
+import sqlite3
 
 url = "https://github.com/orgs/google/repositories"
+db_name = "github_google_repositories.db"
 
 header = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
@@ -49,6 +51,18 @@ def get_page(page):
     print(f"取得失敗:{page}ページ目 (5回取り直しても429が返ってきた)")
     return None
 
+# DBに接続し、データを保存するテーブルを作成する
+conn = sqlite3.connect(db_name)
+cur = conn.cursor()
+cur.execute("""
+    CREATE TABLE IF NOT EXISTS repositories (
+        id       INTEGER PRIMARY KEY AUTOINCREMENT,
+        name     TEXT UNIQUE,
+        language TEXT,
+        stars    INTEGER
+    )
+""")
+
 
 # 1ページ目を取得し、ページ送りのリンクから最後のページ番号を取得する
 html_soup = get_page(1)
@@ -74,8 +88,18 @@ for page in range(1, last_page + 1):
         stars = to_number(star_tag.get_text()) if star_tag else 0   
 
         print(name, language, stars)
+
+        # 取り出したデータをDBに保存する
+        cur.execute(
+            "INSERT OR REPLACE INTO repositories (name, language, stars) VALUES (?, ?, ?)",
+            (name, language, stars),
+        )
+
         count += 1
 
+    conn.commit()
     print(f"{page}/{last_page}ページ目:{count}件")
 
 print(f"完了:{count}件")
+
+
