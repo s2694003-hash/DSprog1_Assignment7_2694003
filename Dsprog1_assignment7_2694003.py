@@ -13,3 +13,7 @@ res.encoding = 'utf-8'  # 文字コードをUTF-8に変換する
 
 print(f"ステータスコード:{res.status_code}")
 print(f"ステータスメッセージ:{res.reason}")
+
+# 取得したHTMLをgithub-google.htmlファイルに書き込む（タグの構造を確認するため）
+with open("github-google.html", "w", encoding="utf-8") as f:
+    f.write(res.text)
